@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delivery Bot UI</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; padding: 20px; }
+        #chat-container { width: 100%; max-width: 400px; background: white; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; height: 80vh; }
+        #chat-header { background: #ff4757; color: white; padding: 15px; text-align: center; font-weight: bold; }
+        #chat-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { padding: 10px 15px; border-radius: 15px; max-width: 80%; word-wrap: break-word; }
+        .bot-msg { background: #f1f2f6; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .user-msg { background: #ff4757; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        #input-area { display: flex; border-top: 1px solid #ddd; }
+        #user-input { flex: 1; padding: 15px; border: none; outline: none; }
+        #send-btn { padding: 15px 20px; border: none; background: #ff4757; color: white; cursor: pointer; font-weight: bold; }
+        #send-btn:hover { background: #ff6b81; }
+    </style>
+</head>
+<body>
+
+<div id="chat-container">
+    <div id="chat-header">🤖 Support Bot</div>
+    <div id="chat-box">
+        <div class="message bot-msg">Hi! I am your automated assistant. Please enter your 10-digit Order ID so I can look up your details.</div>
+    </div>
+    <div id="input-area">
+        <input type="text" id="user-input" placeholder="Type a message..." autocomplete="off">
+        <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+</div>
+
+<script>
+    const inputField = document.getElementById("user-input");
+    
+    // Send message on 'Enter' key
+    inputField.addEventListener("keypress", function(event) {
+        if (event.key === "Enter") { sendMessage(); }
+    });
+
+    function sendMessage() {
+        let text = inputField.value.trim();
+        if (text === "") return;
+
+        appendMessage("user-msg", text);
+        inputField.value = "";
+
+        // Send to Flask backend
+        fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text })
+        })
+        .then(response => response.json())
+        .then(data => {
+            appendMessage("bot-msg", data.response);
+        });
+    }
+
+    function appendMessage(className, text) {
+        let chatBox = document.getElementById("chat-box");
+        let msgDiv = document.createElement("div");
+        msgDiv.className = "message " + className;
+        // Use innerText and replace newlines with <br> for HTML rendering
+        msgDiv.innerHTML = text.replace(/\n/g, "<br>");
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
+    }
+</script>
+
+</body>
+</html>
