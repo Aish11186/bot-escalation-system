@@ -3,15 +3,15 @@ import re
 
 st.set_page_config(page_title="Delivery Support Bot", page_icon="🤖")
 st.title("🤖 Delivery Support Bot")
-st.caption("This bot is smarter! It asks follow-up questions and remembers context, but still ultimately fails at complex issues.")
+st.caption("This is just a bot")
 
-# Initialize memory (session state)
+
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Hi! I am your automated assistant. Please enter your 10-digit Order ID so I can look up your details."}
     ]
     st.session_state.order_verified = False
-    st.session_state.conversation_stage = "start" # This helps the bot remember what it just asked!
+    st.session_state.conversation_stage = "start" 
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -26,7 +26,7 @@ if user_input := st.chat_input("Type your message here..."):
     user_text = user_input.strip().lower()
     bot_response = ""
 
-    # RULE 1: Verify Order ID First
+    
     if not st.session_state.order_verified:
         if re.match(r'.*\b\d{10}\b.*', user_text):
             st.session_state.order_verified = True
@@ -34,41 +34,41 @@ if user_input := st.chat_input("Type your message here..."):
         else:
             bot_response = "I couldn't find a 10-digit number in your message. I need your Order ID before I can access your account."
 
-    # RULE 2: Actively block "Human/Agent" requests by pretending to be helpful
+    
     elif any(word in user_text for word in ["human", "agent", "person", "representative", "real"]):
         bot_response = "I understand you'd like to speak to an agent. However, I can resolve 95% of issues right here! Let's try. What is the main issue with the order?"
 
-    # MULTI-TURN LOGIC (This makes the bot feel SMART)
     
-    # If the bot previously asked WHICH item was missing:
+    
+    
     elif st.session_state.conversation_stage == "asking_missing_item":
-        # The bot dynamically repeats what the user just typed!
-        bot_response = f"Got it. I have noted that '{user_input}' is missing from your bag. Let me check the system... \n\nUnfortunately, the restaurant marked all items as packed. We cannot issue a refund right now. Is there anything else?"
-        st.session_state.conversation_stage = "start" # Reset the conversation
         
-    # If the bot previously asked HOW late the order is:
+        bot_response = f"Got it. I have noted that '{user_input}' is missing from your bag. Let me check the system... \n\nUnfortunately, the restaurant marked all items as packed. We cannot issue a refund right now. Is there anything else?"
+        st.session_state.conversation_stage = "start" 
+        
+    
     elif st.session_state.conversation_stage == "asking_time":
         bot_response = "Thank you for the timeline. Since it has not been more than 45 minutes past the original ETA, our system cannot compensate you yet. Please wait a bit longer!"
-        st.session_state.conversation_stage = "start" # Reset the conversation
+        st.session_state.conversation_stage = "start" 
 
-    # MAIN INTENT DETECTION (Smarter Natural Language)
+    
     elif st.session_state.conversation_stage == "start":
         
-        # Smart Negation: Check if they used negative words with refund
+        
         if "refund" in user_text and any(neg in user_text for neg in ["don't", "not", "do not"]):
             bot_response = "I understand you DO NOT want a refund. In that case, would you like me to track the delivery or report a missing item?"
             
         elif any(word in user_text for word in ["refund", "money", "cancel", "return"]):
             bot_response = "I see you are inquiring about a refund. Was your order paid via Credit Card or UPI/Wallet?"
-            st.session_state.conversation_stage = "start" # Keeps them in a loop
+            st.session_state.conversation_stage = "start" 
             
         elif any(word in user_text for word in ["missing", "broken", "spilled", "wrong"]):
             bot_response = "I am so sorry to hear there is an issue with the items. Which exact item was missing or damaged?"
-            st.session_state.conversation_stage = "asking_missing_item" # Move to the missing item stage
+            st.session_state.conversation_stage = "asking_missing_item" 
             
         elif any(word in user_text for word in ["where", "late", "track", "delay", "not here"]):
             bot_response = "I see your order is delayed. How many minutes past the original estimated delivery time is it?"
-            st.session_state.conversation_stage = "asking_time" # Move to the delay stage
+            st.session_state.conversation_stage = "asking_time" 
             
         else:
             bot_response = "I'm analyzing your request... I am not quite sure how to categorize that. Could you please specify if this is about delivery tracking, missing items, or refunds?"
