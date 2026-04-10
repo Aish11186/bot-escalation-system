@@ -1,138 +1,189 @@
 from flask import Flask, render_template, request, jsonify, session
-import requests
 import re
+import random
+from difflib import get_close_matches
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key_for_testing"
 
+# Patterns
+missing_patterns = r"(missing|not received|didn't get|broken|damaged|wrong item|incorrect|defective)"
+delay_patterns = r"(late|delay|not arrived|taking too long)"
+track_patterns = r"(track|status|where is my order)"
+refund_patterns = r"(refund|money back|charged|double payment|payment issue)"
+cancel_patterns = r"(cancel|stop order|don't want it)"
+address_patterns = r"(change address|wrong address|update address|phone number)"
+
 @app.route("/")
 def home():
     session.clear()
+    session['order_verified'] = False
     session['conversation_stage'] = "chatting"
-    session['issue_type'] = None 
+    session['issue_type'] = None
+    session['escalation_count'] = 0
+    session['details'] = {}
+    session['order_attempts'] = 0
     return render_template("index.html")
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    user_input = request.json.get("message")
-    user_text = user_input.strip().lower()
-    bot_response = ""
+    user_input = request.json.get("message", "")
+    user_text = user_input.strip().lower() if user_input else ""
 
-    # Call the ML escalation API
-    try:
-        api_response = requests.post(
-            "http://127.0.0.1:8000/predict",
-            json={"conversation": user_input}
-        )
-        api_result = api_response.json()
+    # Ensure session keys exist
+    if 'details' not in session:
+        session['details'] = {}
+    if 'order_attempts' not in session:
+        session['order_attempts'] = 0
 
-        # If the model predicts escalation, respond immediately
-        if api_result.get("escalate") == 1:
-            return jsonify({
-                "response": "I sense that this issue may require human assistance. Let me escalate this conversation to a support specialist."
-            })
-    except Exception as e:
-        # If API is not running, continue normal chatbot flow
-        print("Model API error:", e)
-
-    if 'conversation_stage' not in session:
+    # Reset
+    if user_text in ["reset", "start over", "restart"]:
+        session.clear()
         session['conversation_stage'] = "chatting"
         session['order_verified'] = False
+        return jsonify({"response": "Conversation reset. How can I help you today?"})
 
-    stage = session.get('conversation_stage')
+    # Greeting
+    if user_text in ["hi", "hello", "hey"]:
+        return jsonify({"response": "Hello! 👋 How can I help you today?"})
 
-    if any(word in user_text for word in ["human", "agent", "person", "representative", "real", "customer service"]):
-        return jsonify({"response": "I understand you'd like to speak with a human. However, our support team is currently experiencing high volumes. I am fully capable of handling your request. Let's continue."})
+    # Escalation
+    escalation_keywords = ["human", "agent", "person", "representative", "real", "customer service", "escalate", "manager"]
+    if any(word in user_text for word in escalation_keywords):
+        session['escalation_count'] = session.get('escalation_count', 0) + 1
+        count = session['escalation_count']
 
-    if stage == "chatting" and user_text in ["hi", "hello", "hey", "help"]:
-        return jsonify({"response": "Hello there! 👋 I am your automated support assistant. How can I help you with your order today?"})
+        if count == 1:
+            return jsonify({"response": "I understand you'd prefer a human. Let me try to resolve this quickly first. What's the issue?"})
+        elif count == 2:
+            return jsonify({"response": "Connecting to a human may take time. I can resolve most issues instantly. Tell me what happened."})
+        else:
+            return jsonify({"response": "I've logged your request for a human agent. You’ll be contacted shortly."})
+
+    stage = session.get('conversation_stage', 'chatting')
+
+    # Quick replies
+    if user_text in ["1", "2", "3", "4"]:
+        mapping = {"1": "delay", "2": "missing", "3": "refund", "4": "address"}
+        session['issue_type'] = mapping[user_text]
+        session['conversation_stage'] = "waiting_for_order_id"
+        return jsonify({"response": "Got it! Please provide your 10-digit Order ID."})
+
+    # Extract items
+    items = re.findall(r"(pizza|burger|fries|drink|pasta|sandwich|shake|combo)", user_text)
+    if items:
+        session['details']['items'] = items
+
+    # Order ID detection
+    order_match = re.search(r"\b\d{10}\b", user_text)
 
     if stage == "waiting_for_order_id":
-        if re.match(r'.*\b\d{10}\b.*', user_text):
+        if order_match:
             session['order_verified'] = True
-            
-            if session.get('issue_type') == "missing":
-                bot_response = "Thank you. I see your order. To start, could you tell me exactly which items were missing or damaged?"
-                session['conversation_stage'] = "missing_step_1"
-            elif session.get('issue_type') == "delay":
-                bot_response = "Thanks for the Order ID! I can see the order in my system. Roughly how many minutes past the delivery time is it?"
-                session['conversation_stage'] = "delay_step_1"
-            else:
-                bot_response = "Thank you, I have verified your Order ID. Could you please explain the main reason for your refund request?"
-                session['conversation_stage'] = "refund_step_1"
-        else:
-            bot_response = "I couldn't find a 10-digit number. Please double-check your Order ID and type it again."
-        
-        return jsonify({"response": bot_response})
+            session['order_id'] = order_match.group()
+            session['order_attempts'] = 0
+            issue = session.get('issue_type')
 
+            if issue == "missing":
+                session['conversation_stage'] = "missing_step_1"
+                return jsonify({"response": "Thanks! What item is missing or damaged?"})
+
+            elif issue == "delay":
+                session['conversation_stage'] = "delay_step_1"
+                return jsonify({"response": "How many minutes late is your order?"})
+
+            elif issue == "refund":
+                session['conversation_stage'] = "refund_step_1"
+                return jsonify({"response": "Please explain the payment issue."})
+
+            elif issue == "address":
+                session['conversation_stage'] = "address_step_1"
+                return jsonify({"response": "What is the new address or phone number?"})
+
+            elif issue == "cancel":
+                return jsonify({"response": "This order is already processed and cannot be canceled. You may refuse delivery."})
+
+            elif issue == "track":
+                return jsonify({"response": "Your order is currently in transit and will arrive soon."})
+
+            return jsonify({"response": "Order verified. Please explain your issue."})
+
+        else:
+            session['order_attempts'] += 1
+            if session['order_attempts'] > 2:
+                return jsonify({"response": "If you don’t have the Order ID, please describe your issue and I’ll try to help."})
+            return jsonify({"response": "Please provide a valid 10-digit Order ID."})
+
+    # Conversation stages
     if stage == "missing_step_1":
         session['conversation_stage'] = "missing_step_2"
-        return jsonify({"response": f"Got it. I have noted that '{user_input}' had an issue. Was the outer packaging tampered with or open when you received it?"})
-    
+        items = session.get('details', {}).get('items', [])
+        if items:
+            return jsonify({"response": f"I see your {', '.join(items)} is affected. Would you like a refund or replacement?"})
+        return jsonify({"response": "Would you like a refund or replacement?"})
+
     elif stage == "missing_step_2":
-        session['conversation_stage'] = "missing_step_3"
-        return jsonify({"response": "Thank you for confirming that. Could you please take a clear photo of the items you *did* receive and the receipt, and upload it using the '+' button in the app?"})
-    
-    elif stage == "missing_step_3":
         session['conversation_stage'] = "chatting"
-        return jsonify({"response": "Thank you for the information. I have analyzed your request and checked with the restaurant's dispatch system. Unfortunately, the restaurant has marked all items as verified and packed. Because of this, I cannot process a refund or replacement for this order. Is there anything else I can assist with?"})
+        return jsonify({"response": "Request processed. You'll receive confirmation shortly."})
 
     elif stage == "delay_step_1":
         session['conversation_stage'] = "delay_step_2"
-        return jsonify({"response": "I see. Have you tried calling the delivery partner through the app to check their location?"})
-    
+        responses = [
+            "I understand the wait is frustrating.",
+            "Sorry about the delay, that shouldn't happen.",
+            "I can imagine that's annoying — let me help."
+        ]
+        return jsonify({"response": random.choice(responses) + " Have you contacted the delivery partner?"})
+
     elif stage == "delay_step_2":
-        session['conversation_stage'] = "delay_step_3"
-        return jsonify({"response": "I understand. Sometimes partners lose GPS signal. Could you please confirm your delivery pin code or landmark just so I can verify the route?"})
-    
-    elif stage == "delay_step_3":
         session['conversation_stage'] = "chatting"
-        return jsonify({"response": "Thank you. Let me check the live tracking system... \n\nMy system shows the partner is on the way but stuck in traffic. Since the delay has not exceeded our maximum 60-minute policy threshold, I cannot cancel the order or offer compensation at this time. Please wait a little longer!"})
+        return jsonify({"response": "Your order has been prioritized and should arrive soon."})
 
     elif stage == "refund_step_1":
         session['conversation_stage'] = "refund_step_2"
-        return jsonify({"response": "I have noted your reason. Did you pay for this order using a Credit Card, UPI, or Wallet?"})
-    
+        return jsonify({"response": "What was the payment method?"})
+
     elif stage == "refund_step_2":
-        session['conversation_stage'] = "refund_step_3"
-        return jsonify({"response": "Thanks. Refunds to that payment method usually take 5-7 business days. Do you want me to proceed with submitting the cancellation request to the restaurant?"})
-    
-    elif stage == "refund_step_3":
         session['conversation_stage'] = "chatting"
-        return jsonify({"response": "Processing your request... \n\nI apologize, but the restaurant has already started preparing your food. According to our strict cancellation policy, we cannot issue a refund once food preparation has begun. You will still receive your order. Is there anything else?"})
+        return jsonify({"response": "Refund processed. It will reflect in 5-7 business days."})
 
-    if stage == "chatting":
-        if any(word in user_text for word in ["missing", "broken", "wrong", "spilled", "ruined", "cold"]):
-            session['issue_type'] = "missing"
-            if not session.get('order_verified'):
-                session['conversation_stage'] = "waiting_for_order_id"
-                bot_response = "Oh no, I am so sorry to hear about your food! I definitely want to help fix this. To get started, could you please share your 10-digit Order ID?"
-            else:
-                session['conversation_stage'] = "missing_step_1"
-                bot_response = "I am really sorry about that. Could you tell me exactly which items were missing or damaged?"
-                
-        elif any(word in user_text for word in ["late", "where", "track", "delay", "not here", "taking so long"]):
-            session['issue_type'] = "delay"
-            if not session.get('order_verified'):
-                session['conversation_stage'] = "waiting_for_order_id"
-                bot_response = "I know waiting for food can be frustrating. Let me help you with that! Could you please provide your 10-digit Order ID?"
-            else:
-                session['conversation_stage'] = "delay_step_1"
-                bot_response = "I understand the wait is frustrating. How many minutes past the estimated delivery time is it?"
+    elif stage == "address_step_1":
+        session['conversation_stage'] = "chatting"
+        return jsonify({"response": "Address updated successfully."})
 
-        elif any(word in user_text for word in ["refund", "money", "cancel", "return", "charge"]):
-            session['issue_type'] = "refund"
-            if not session.get('order_verified'):
-                session['conversation_stage'] = "waiting_for_order_id"
-                bot_response = "I can certainly look into a refund for you. First, I just need your 10-digit Order ID."
-            else:
-                session['conversation_stage'] = "refund_step_1"
-                bot_response = "I see. To process a refund request, could you briefly explain the main reason you are asking for your money back?"
-
+    # Intent detection
+    if re.search(missing_patterns, user_text):
+        session['issue_type'] = "missing"
+    elif re.search(track_patterns, user_text):
+        session['issue_type'] = "track"
+    elif re.search(delay_patterns, user_text):
+        session['issue_type'] = "delay"
+    elif re.search(refund_patterns, user_text):
+        session['issue_type'] = "refund"
+    elif re.search(cancel_patterns, user_text):
+        session['issue_type'] = "cancel"
+    elif re.search(address_patterns, user_text):
+        session['issue_type'] = "address"
+    else:
+        # Improved fuzzy matching
+        keywords = ["refund", "delay", "missing", "cancel"]
+        for word in user_text.split():
+            match = get_close_matches(word, keywords, n=1, cutoff=0.8)
+            if match:
+                session['issue_type'] = match[0]
+                break
         else:
-            bot_response = "I'm listening. Could you give me a little more context? Are you dealing with a delayed delivery, a missing item, or something else entirely?"
+            return jsonify({
+                "response": "Are you facing:\n1. Delivery delay\n2. Missing/damaged item\n3. Payment/refund\n4. Address change\nReply with a number."
+            })
 
-        return jsonify({"response": bot_response})
+    # Move to order ID step
+    if not session.get('order_verified'):
+        session['conversation_stage'] = "waiting_for_order_id"
+        return jsonify({"response": "Please provide your 10-digit Order ID."})
+
+    return jsonify({"response": "How can I assist further?"})
+
 
 if __name__ == "__main__":
     app.run(debug=True)
