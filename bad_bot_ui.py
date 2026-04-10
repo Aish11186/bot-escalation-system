@@ -44,10 +44,10 @@ def chat():
         return jsonify({"response": "Conversation reset. How can I help you today?"})
 
     # Greeting
-    if user_text in ["hi", "hello", "hey"]:
+    if user_text in ["hi", "hello", "hey", "listen", "help"]:
         return jsonify({"response": "Hello! 👋 How can I help you today?"})
 
-    # Escalation
+    # Escalation (Ready to hand off to your team's system)
     escalation_keywords = ["human", "agent", "person", "representative", "real", "customer service", "escalate", "manager"]
     if any(word in user_text for word in escalation_keywords):
         session['escalation_count'] = session.get('escalation_count', 0) + 1
@@ -58,16 +58,10 @@ def chat():
         elif count == 2:
             return jsonify({"response": "Connecting to a human may take time. I can resolve most issues instantly. Tell me what happened."})
         else:
-            return jsonify({"response": "I've logged your request for a human agent. You’ll be contacted shortly."})
+            # THIS is where you will eventually plug in your team's real handoff code
+            return jsonify({"response": "I've logged your request for a human agent. You’ll be contacted shortly by our escalation team."})
 
     stage = session.get('conversation_stage', 'chatting')
-
-    # Quick replies
-    if user_text in ["1", "2", "3", "4"]:
-        mapping = {"1": "delay", "2": "missing", "3": "refund", "4": "address"}
-        session['issue_type'] = mapping[user_text]
-        session['conversation_stage'] = "waiting_for_order_id"
-        return jsonify({"response": "Got it! Please provide your 10-digit Order ID."})
 
     # Extract items
     items = re.findall(r"(pizza|burger|fries|drink|pasta|sandwich|shake|combo)", user_text)
@@ -151,7 +145,8 @@ def chat():
         session['conversation_stage'] = "chatting"
         return jsonify({"response": "Address updated successfully."})
 
-    # Intent detection
+    # Intent detection via natural language
+    intent_found = True
     if re.search(missing_patterns, user_text):
         session['issue_type'] = "missing"
     elif re.search(track_patterns, user_text):
@@ -165,25 +160,40 @@ def chat():
     elif re.search(address_patterns, user_text):
         session['issue_type'] = "address"
     else:
-        # Improved fuzzy matching
-        keywords = ["refund", "delay", "missing", "cancel"]
+        # Improved fuzzy matching as a backup
+        keywords = ["refund", "delay", "missing", "cancel", "address", "track"]
+        match = None
         for word in user_text.split():
-            match = get_close_matches(word, keywords, n=1, cutoff=0.8)
-            if match:
-                session['issue_type'] = match[0]
+            match_list = get_close_matches(word, keywords, n=1, cutoff=0.8)
+            if match_list:
+                match = match_list[0]
                 break
+        
+        if match:
+            session['issue_type'] = match
         else:
-            return jsonify({
-                "response": "Are you facing:\n1. Delivery delay\n2. Missing/damaged item\n3. Payment/refund\n4. Address change\nReply with a number."
-            })
+            intent_found = False
 
-    # Move to order ID step
+    if not intent_found:
+        # --- THE FRUSTRATION SYSTEM ---
+        # Bot acts completely clueless if it can't match to its 6 basic tasks
+        frustrating_responses = [
+            "I'm sorry, I didn't quite catch that. Could you try rephrasing?",
+            "I am still learning! Please explain your issue again.",
+            "Hmm, I couldn't find that in my database. Did you try restarting the app?",
+            "I can only help with specific issues. Please try typing something else.",
+            "That does not compute. Can you provide more details?",
+            "I'm a little confused. What exactly do you need help with today?",
+            "Please check our FAQ on the website. Otherwise, type your issue again."
+        ]
+        return jsonify({"response": random.choice(frustrating_responses)})
+
+    # Move to order ID step (If it accurately identified an issue)
     if not session.get('order_verified'):
         session['conversation_stage'] = "waiting_for_order_id"
-        return jsonify({"response": "Please provide your 10-digit Order ID."})
+        return jsonify({"response": f"I can help with that. Please provide your 10-digit Order ID so I can locate your details."})
 
     return jsonify({"response": "How can I assist further?"})
-
 
 if __name__ == "__main__":
     app.run(debug=True)
