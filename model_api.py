@@ -1,15 +1,19 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 import pickle
+import re
+
+import numpy as np
 import pandas as pd
-from nltk.sentiment import SentimentIntensityAnalyzer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 app = Flask(__name__)
 
-model = pickle.load(open("escalation_model.pkl","rb"))
-scaler = pickle.load(open("scaler.pkl","rb"))
-sia = SentimentIntensityAnalyzer()
+with open("escalation_model.pkl", "rb") as model_file:
+    model = pickle.load(model_file)
+
+with open("scaler.pkl", "rb") as scaler_file:
+    scaler = pickle.load(scaler_file)
 
 FEATURE_NAMES = [
     "num_turns",
@@ -24,7 +28,7 @@ FEATURE_NAMES = [
     "generic_response_ratio",
 ]
 
-fallback_phrases = [
+FALLBACK_PHRASES = [
     "i don't understand",
     "sorry",
     "can you rephrase",
@@ -35,16 +39,12 @@ fallback_phrases = [
     "please clarify",
 ]
 
-frustration_keywords = [
+FRUSTRATION_KEYWORDS = [
     "frustrated",
     "angry",
-    "not working",
     "still",
     "again",
-    "why",
-    "worst",
-    "hate",
-    "useless",
+    "same",
     "issue",
     "problem",
     "error",
@@ -52,164 +52,152 @@ frustration_keywords = [
     "agent",
     "refund",
     "late",
+    "waiting",
+    "unacceptable",
 ]
 
-generic_responses = [
-    "i am here to help",
-    "please clarify",
-    "can you provide more details",
-    "let me check",
-    "i will assist you",
-    "thanks for reaching out",
+GENERIC_RESPONSES = [
+    "i can help",
+    "please share your 10-digit order id",
+    "please describe the problem",
+    "how can i help",
 ]
 
+POSITIVE_WORDS = {
+    "thanks", "thank", "great", "good", "resolved", "helpful", "fine", "ok", "okay"
+}
 
-def explicit_escalation_request(user_msgs):
-    escalation_terms = [
-        "human",
-        "agent",
-        "person",
-        "representative",
-        "real person",
-        "customer service",
-    ]
-
-    return any(
-        term in message.lower()
-        for message in user_msgs
-        for term in escalation_terms
-    )
+NEGATIVE_WORDS = {
+    "frustrated", "angry", "late", "missing", "broken", "damaged", "wrong",
+    "refund", "problem", "issue", "error", "terrible", "bad", "useless", "again"
+}
 
 
-def parse_conversation(text):
-    parsed = []
+def parse_conversation(conversation_text):
+    """Convert the serialized history string into ordered role/message pairs."""
+    parsed_turns = []
 
-    for turn in text.split("||"):
-        if ":" in turn:
-            role, message = turn.split(":", 1)
-            parsed.append((role.strip(), message.strip()))
+    for turn in conversation_text.split("||"):
+        clean_turn = turn.strip()
+        if not clean_turn:
+            continue
 
-    if not parsed and text.strip():
-        parsed.append(("User", text.strip()))
+        if ":" in clean_turn:
+            role, message = clean_turn.split(":", 1)
+            parsed_turns.append((role.strip(), message.strip()))
+        else:
+            parsed_turns.append(("User", clean_turn))
 
-    return parsed
+    return parsed_turns
 
 
-def split_roles(parsed):
-    user_msgs = [message for role, message in parsed if role.lower() == "user"]
-    bot_msgs = [message for role, message in parsed if role.lower() == "bot"]
-    return user_msgs, bot_msgs
+def split_roles(parsed_turns):
+    user_messages = [message for role, message in parsed_turns if role.lower() == "user"]
+    bot_messages = [message for role, message in parsed_turns if role.lower() == "bot"]
+    return user_messages, bot_messages
+
+
+def score_message_sentiment(message):
+    """Use a tiny rule-based fallback sentiment scorer so the API runs without NLTK data."""
+    tokens = re.findall(r"\b\w+\b", message.lower())
+    if not tokens:
+        return 0.0
+
+    positive_hits = sum(token in POSITIVE_WORDS for token in tokens)
+    negative_hits = sum(token in NEGATIVE_WORDS for token in tokens)
+    return (positive_hits - negative_hits) / len(tokens)
 
 
 def sentiment_scores(messages):
-    return [sia.polarity_scores(message)["compound"] for message in messages]
+    return [score_message_sentiment(message) for message in messages]
 
 
-def repetition_score(user_msgs):
-    if len(user_msgs) < 2:
-        return 0
+def repetition_score(user_messages):
+    if len(user_messages) < 2:
+        return 0.0
 
     try:
-        vectorizer = TfidfVectorizer().fit(user_msgs)
-        vectors = vectorizer.transform(user_msgs)
+        vectorizer = TfidfVectorizer()
+        vectors = vectorizer.fit_transform(user_messages)
     except ValueError:
-        return 0
+        return 0.0
 
-    sim_scores = []
+    similarities = []
+    for index in range(1, len(user_messages)):
+        similarity = cosine_similarity(vectors[index], vectors[index - 1])[0][0]
+        similarities.append(float(similarity))
 
-    for i in range(1, len(user_msgs)):
-        sim = cosine_similarity(vectors[i], vectors[i - 1])[0][0]
-        sim_scores.append(sim)
-
-    return max(sim_scores) if sim_scores else 0
+    return max(similarities) if similarities else 0.0
 
 
-def fallback_count(bot_msgs):
+def count_phrase_matches(messages, phrases):
     count = 0
-
-    for message in bot_msgs:
-        message_lower = message.lower()
-        if any(phrase in message_lower for phrase in fallback_phrases):
+    for message in messages:
+        lowered = message.lower()
+        if any(phrase in lowered for phrase in phrases):
             count += 1
-
     return count
 
 
-def frustration_score(user_msgs):
-    score = 0
-
-    for message in user_msgs:
-        message_lower = message.lower()
-        if any(keyword in message_lower for keyword in frustration_keywords):
-            score += 1
-
-    return score
+def generic_ratio(bot_messages):
+    if not bot_messages:
+        return 0.0
+    return count_phrase_matches(bot_messages, GENERIC_RESPONSES) / len(bot_messages)
 
 
-def generic_ratio(bot_msgs):
-    if not bot_msgs:
-        return 0
-
-    generic_count = 0
-
-    for message in bot_msgs:
-        message_lower = message.lower()
-        if any(generic in message_lower for generic in generic_responses):
-            generic_count += 1
-
-    return generic_count / len(bot_msgs)
+def frustration_score(user_messages):
+    score = count_phrase_matches(user_messages, FRUSTRATION_KEYWORDS)
+    score += 1 if repetition_score(user_messages) > 0.6 else 0
+    return float(score)
 
 
 def extract_features(conversation_text):
-    parsed = parse_conversation(conversation_text)
-    user_msgs, bot_msgs = split_roles(parsed)
+    """Build the exact 10 features expected by the trained model and scaler."""
+    parsed_turns = parse_conversation(conversation_text)
+    user_messages, bot_messages = split_roles(parsed_turns)
 
-    num_turns = len(parsed)
-    num_user_msgs = len(user_msgs)
-    num_bot_msgs = len(bot_msgs)
-    user_bot_ratio = num_user_msgs / num_bot_msgs if num_bot_msgs else num_user_msgs
+    user_sentiments = sentiment_scores(user_messages)
+    avg_sentiment = float(np.mean(user_sentiments)) if user_sentiments else 0.0
+    min_sentiment = float(np.min(user_sentiments)) if user_sentiments else 0.0
+    sentiment_trend = (
+        float(user_sentiments[-1] - user_sentiments[0]) if len(user_sentiments) > 1 else 0.0
+    )
 
-    sentiments = sentiment_scores(user_msgs)
-    avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
-    min_sentiment = min(sentiments) if sentiments else 0
-    sentiment_trend = sentiments[-1] - sentiments[0] if len(sentiments) > 1 else 0
-
-    features = [[
-        num_turns,
-        num_user_msgs,
-        num_bot_msgs,
-        user_bot_ratio,
+    feature_row = [[
+        float(len(parsed_turns)),
+        float(len(user_messages)),
+        float(len(bot_messages)),
+        float(len(user_messages) / len(bot_messages)) if bot_messages else float(len(user_messages)),
         avg_sentiment,
         min_sentiment,
-        -sentiment_trend if sentiment_trend < 0 else 0,
-        fallback_count(bot_msgs) * 1.5,
-        frustration_score(user_msgs) * 1.5,
-        generic_ratio(bot_msgs) * 1.2,
+        abs(sentiment_trend) if sentiment_trend < 0 else 0.0,
+        float(count_phrase_matches(bot_messages, FALLBACK_PHRASES)),
+        frustration_score(user_messages),
+        float(generic_ratio(bot_messages)),
     ]]
 
-    return pd.DataFrame(features, columns=FEATURE_NAMES)
+    return pd.DataFrame(feature_row, columns=FEATURE_NAMES, dtype=float)
 
 
 @app.route("/predict", methods=["POST"])
 def predict():
     payload = request.get_json(silent=True) or {}
-    data = payload.get("conversation", "")
+    conversation = payload.get("conversation", "")
 
-    if not isinstance(data, str) or not data.strip():
+    if not isinstance(conversation, str) or not conversation.strip():
         return jsonify({"error": "conversation must be a non-empty string"}), 400
 
-    parsed = parse_conversation(data)
-    user_msgs, _ = split_roles(parsed)
+    features = extract_features(conversation)
+    scaled_features = scaler.transform(features)
+    prediction = int(model.predict(scaled_features)[0])
+    probability = float(model.predict_proba(scaled_features)[0][1])
 
-    if explicit_escalation_request(user_msgs):
-        return jsonify({"escalate": 1, "probability": 1.0})
-
-    features = extract_features(data)
-    features_scaled = scaler.transform(features)
-    probability = model.predict_proba(features_scaled)[0][1]
-    prediction = 1 if probability >= 0.5 else 0
-
-    return jsonify({"escalate": prediction, "probability": float(probability)})
+    return jsonify({
+        "prediction": prediction,
+        "probability": probability,
+        "escalate": prediction,
+        "feature_names": FEATURE_NAMES,
+    })
 
 
 @app.route("/health", methods=["GET"])

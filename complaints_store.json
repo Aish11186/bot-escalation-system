@@ -1,0 +1,42 @@
+{
+  "active": [
+    {
+      "id": "87053",
+      "confidence": "0.92",
+      "reason": "replacement",
+      "status": "active"
+    },
+    {
+      "id": "60653",
+      "confidence": "0.91",
+      "reason": "i ordered my order got de;ayed",
+      "status": "active"
+    }
+  ],
+  "resolved": [
+    {
+      "id": "44863",
+      "confidence": "0.85",
+      "reason": "please contact police",
+      "status": "resolved"
+    },
+    {
+      "id": "84555",
+      "confidence": "0.91",
+      "reason": "i need a human now",
+      "status": "resolved"
+    },
+    {
+      "id": "32625",
+      "confidence": "0.97",
+      "reason": "item is broken",
+      "status": "resolved"
+    },
+    {
+      "id": "72731",
+      "confidence": "0.96",
+      "reason": "no talk to a human, you sent me a completely wrong thing '",
+      "status": "resolved"
+    }
+  ]
+}
