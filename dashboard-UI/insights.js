@@ -14,7 +14,7 @@ labels: [
 datasets: [{
 label: "Bot Failure Count",
 
-data: [400, 250, 380],
+data: [42, 28, 37],
 
 backgroundColor: [
 "#3b4048",

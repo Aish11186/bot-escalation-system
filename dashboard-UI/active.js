@@ -24,6 +24,20 @@ complaints.forEach((complaint) => {
     <div class="label">Reason</div>
     <div class="value">${complaint.reason || complaint.complaint || "No reason recorded."}</div>
 
+    <div class="label">Issue</div>
+    <div class="value">${complaint.issue || "No issue recorded."}</div>
+
+    <div class="label">Escalation Reason</div>
+    <div class="value">${complaint.escalation_reason || "No escalation reason recorded."}</div>
+
+    <div class="label">Last Customer Message</div>
+    <div class="value">${complaint.last_customer_message || "No customer message recorded."}</div>
+
+    ${complaint.order_id ? `
+    <div class="label">Order ID</div>
+    <div class="value">${complaint.order_id}</div>
+    ` : ""}
+
     <button class="btn" data-id="${complaint.id}">
     Connect via Call
     </button>
@@ -37,25 +51,33 @@ complaints.forEach((complaint) => {
 async function loadComplaints() {
 try {
     const response = await fetch("/api/complaints/active")
+    if (!response.ok) {
+        throw new Error(`Active complaints request failed with ${response.status}`)
+    }
     const data = await response.json()
     complaints = data.complaints || []
     renderComplaints()
 } catch (error) {
+    console.error("Failed to load active complaints:", error)
     grid.innerHTML = `<div class="card"><div class="value">Unable to load active complaints.</div></div>`
 }
 }
 
 async function resolveComplaint(id) {
 try {
-    await fetch("/api/complaints/resolve", {
+    const response = await fetch("/api/complaints/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id })
     })
+    if (!response.ok) {
+        throw new Error(`Resolve complaint request failed with ${response.status}`)
+    }
 
     complaints = complaints.filter((complaint) => complaint.id !== id)
     renderComplaints()
 } catch (error) {
+    console.error("Failed to resolve complaint:", error)
     alert("Unable to resolve the complaint right now.")
 }
 }
